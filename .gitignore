@@ -1,0 +1,13 @@
+# Unity
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Ll]ogs/
+[Uu]serSettings/
+.vs/
+*.csproj
+*.sln
+*.unitypackage
+
+# Godot
+.godot/
