@@ -2,5 +2,5 @@
 chcp 65001 >nul
 cd /d "%~dp0.."
 echo Starting Heat Firm...
-"%~dp0..\..\tools\godot\godot.exe" --path "%cd%"
+"C:\Users\caleb\OneDrive\Desktop\Godot_v4.7-stable_win64.exe" --path "%cd%"
 pause

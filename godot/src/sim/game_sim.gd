@@ -157,7 +157,8 @@ func get_event_offers_raw() -> Array:
 
 func _find(list: Array, id: String):
 	for it in list:
-		if it.id == id:
+		var k: Variant = it.get("id", it.get("role_id", null))
+		if k != null and str(k) == id:
 			return it
 	return null
 
@@ -166,6 +167,18 @@ func upg_level(id: String) -> int:
 
 func _venue_mult() -> float:
 	return 1.0 + 0.10 * float(_cur().venue)
+
+func _event_effect(effect: String) -> bool:
+	var p := _cur()
+	if p.event_active == null:
+		return false
+	for e in get_pack().events:
+		if e.id == p.event_active and e.effect == effect:
+			return true
+	return false
+
+func _price_mult() -> float:
+	return 1.25 if _event_effect("price_boost") else 1.0
 
 func rank_index_from_xp(xp: int) -> int:
 	var idx := 0
@@ -223,10 +236,8 @@ func water(index: int) -> bool:
 
 func _yield_for(crop: Dictionary) -> int:
 	var base := float(crop.base_yield)
-	if _cur().event_active != null:
-		for e in get_pack().events:
-			if e.id == _cur().event_active and e.effect == "yield_boost":
-				base += 1.0
+	if _event_effect("yield_boost"):
+		base += 1.0
 	return int(roundf(base * (1.0 + 0.5 * float(upg_level("yield")))))
 
 func _roll_quality() -> String:
@@ -304,7 +315,7 @@ func sell(product_id: String, qty: int) -> float:
 	p.inv[product_id] = int(p.inv[product_id]) - doable
 	if int(p.inv[product_id]) <= 0:
 		p.inv.erase(product_id)
-	var revenue := float(prod.price) * float(doable) * _venue_mult()
+	var revenue := float(prod.price) * float(doable) * _venue_mult() * _price_mult()
 	p.cash = float(p.cash) + revenue
 	p.xp = int(p.xp) + doable
 	p.stats.sold = int(p.stats.sold) + doable
@@ -329,7 +340,7 @@ func sell_stock(crop_id: String, qty: int) -> float:
 	p.stock[crop_id] = int(p.stock[crop_id]) - doable
 	if int(p.stock[crop_id]) <= 0:
 		p.stock.erase(crop_id)
-	var revenue := float(crop.price_raw) * float(doable) * _venue_mult()
+	var revenue := float(crop.price_raw) * float(doable) * _venue_mult() * _price_mult()
 	p.cash = float(p.cash) + revenue
 	p.stats.revenue = float(p.stats.revenue) + revenue
 	p.daily.revenue = float(p.daily.revenue) + revenue
@@ -378,7 +389,7 @@ func fulfill_order(order_id: String) -> float:
 	return float(o.reward)
 
 func _upg_cost(upg: Dictionary, lvl: int) -> float:
-	return float(upg.base_cost) * powf(float(upg.cost_mult), float(lvl))
+	return float(upg.base_cost) * pow(float(upg.cost_mult), float(lvl))
 
 func upgrade_cost(upg_id: String) -> float:
 	var upg: Variant = _find(get_pack().upgrades, upg_id)
@@ -488,11 +499,34 @@ func activate_event(event_id: String) -> bool:
 
 func _growth_mult() -> float:
 	var m := 1.0 - 0.08 * float(upg_level("growth"))
-	if _cur().event_active != null:
-		for e in get_pack().events:
-			if e.id == _cur().event_active and e.effect == "growth_boost":
-				m *= 1.6
+	if _event_effect("growth_boost"):
+		m *= 1.6
 	return m
+
+func _product_margin(prod: Dictionary) -> float:
+	# Margin = sale price minus the raw-crop market value consumed by the recipe.
+	var raw_cost := 0.0
+	for cid in prod.recipe:
+		var crop: Variant = _find(get_pack().crops, cid)
+		if crop != null:
+			raw_cost += float(crop.price_raw) * float(prod.recipe[cid])
+	return float(prod.price) - raw_cost
+
+func _best_craftable_product() -> String:
+	# Best-margin product that can actually be crafted from current raw stock.
+	var p := _cur()
+	var best_id := ""
+	var best_margin := -INF
+	for prod in get_pack().products:
+		var craftable := true
+		for cid in prod.recipe:
+			if int(p.stock.get(cid, 0)) < int(prod.recipe[cid]):
+				craftable = false
+				break
+		if craftable and _product_margin(prod) > best_margin:
+			best_margin = _product_margin(prod)
+			best_id = str(prod.id)
+	return best_id
 
 func _staff_act(role: String) -> void:
 	var p := _cur()
@@ -503,10 +537,9 @@ func _staff_act(role: String) -> void:
 					harvest(i)
 					return
 		"craft":
-			for prod in get_pack().products:
-				var n := craft(prod.id, 1)
-				if n > 0:
-					return
+			var pid := _best_craftable_product()
+			if pid != "":
+				craft(pid, 1)
 		"sell":
 			var best: Dictionary = {}
 			var best_val := -1.0
@@ -532,7 +565,16 @@ func _spawn_order() -> void:
 	var custs: Array = get_pack().customers
 	var prod: Dictionary = prods[_rng.randi_range(0, prods.size() - 1)]
 	var cust: Dictionary = custs[_rng.randi_range(0, custs.size() - 1)]
-	var qty := _rng.randi_range(2, 6)
+	var qty := _rng.randi_range(2, 3 + int(p.venue))
+	# Expiry must leave room to physically grow the recipe's crops from scratch:
+	# two full sequential grow cycles of every recipe crop, plus a 60s buffer.
+	# (A venue-3 qty-6 mixed-recipe order needs two back-to-back crop cycles, which
+	# the old flat 60s minimum could expire before.)
+	var grow_need := 0.0
+	for cid in prod.recipe:
+		var rc: Variant = _find(get_pack().crops, cid)
+		if rc != null:
+			grow_need += float(rc.grow_time)
 	var o := {
 		"id": "o%d" % int(p.order_seq),
 		"product": prod.id,
@@ -540,7 +582,7 @@ func _spawn_order() -> void:
 		"reward": float(prod.price) * float(qty) * (1.35 + _rng.randf() * 0.25),
 		"customer": cust.name,
 		"mood": cust.mood,
-		"expires_in": 60.0 + _rng.randf() * 120.0,
+		"expires_in": 60.0 + grow_need * 2.0 + _rng.randf() * 120.0,
 	}
 	p.order_seq = int(p.order_seq) + 1
 	p.orders.append(o)
@@ -557,7 +599,6 @@ func _day_end() -> void:
 	p.event_active = null
 	var evs: Array = get_pack().events
 	p.event_offers = [evs[_rng.randi_range(0, evs.size() - 1)].id]
-	p.orders = []
 	_spawn_order()
 	if _rng.randf() < 0.5:
 		_spawn_order()
@@ -672,15 +713,15 @@ func compute_offline(seconds: float) -> Dictionary:
 						if not y.is_empty():
 							rep.harvests += 1
 						break
-		if "craft" in hired:
-			c_acc += dt
-			while c_acc >= 8.0 / OFFLINE_RATE:
-				c_acc -= 8.0 / OFFLINE_RATE
-				for prod in pack.products:
-					var n := craft(prod.id, 1)
-					if n > 0:
-						rep.crafted += n
-						break
+			if "craft" in hired:
+				c_acc += dt
+				while c_acc >= 8.0 / OFFLINE_RATE:
+					c_acc -= 8.0 / OFFLINE_RATE
+					var best_pid := _best_craftable_product()
+					if best_pid != "":
+						var n := craft(best_pid, 1)
+						if n > 0:
+							rep.crafted += n
 		if "sell" in hired:
 			s_acc += dt
 			while s_acc >= 12.0 / OFFLINE_RATE:
@@ -748,7 +789,10 @@ func restore(d: Dictionary) -> void:
 				merged.merge(profs[k], true)
 				_profiles[k] = merged
 	if not _profiles.has(_meta.selected):
-		_meta.selected = "chilli"
+		if _themes.keys().has(_meta.selected):
+			_profiles[_meta.selected] = _new_profile(_meta.selected)
+		else:
+			_meta.selected = "chilli"
 	_profiles["chilli"] = _profiles.get("chilli", _new_profile("chilli"))
 	_meta.seen["chilli"] = true
 	if not _meta.seen.has(_meta.selected):

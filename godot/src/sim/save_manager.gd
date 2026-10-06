@@ -18,7 +18,8 @@ func _ready() -> void:
 			last_offline_report = _game.compute_offline(off)
 			_game.offline_report_ready.emit(last_offline_report)
 	var t := Timer.new()
-	t.wait_seconds = 5.0
+	t.wait_time = 5.0
+	t.autostart = true
 	t.timeout.connect(save_now)
 	add_child(t)
 

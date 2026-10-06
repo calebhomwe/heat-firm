@@ -61,8 +61,6 @@ func _ensure_and_fulfill(g: GameSim) -> bool:
 			if st.ready:
 				g.harvest(i)
 				did_harvest = true
-		if did_harvest:
-			continue
 		var planted := false
 		var recipe: Dictionary = {}
 		for prod in pack.products:
@@ -75,13 +73,7 @@ func _ensure_and_fulfill(g: GameSim) -> bool:
 				if not st2.locked and st2.crop == "":
 					if g.plant(i, cid):
 						planted = true
-						break
-			if planted:
-				break
-		if not planted:
-			_sell_all(g)
-		if planted:
-			_tick_to(g, 40.0)
+		_tick_to(g, 10.0)
 	var inv_now := int(g.get_inventory().get(pid, 0))
 	if inv_now < need:
 		return false
@@ -185,7 +177,7 @@ func _run() -> void:
 			if g.get_plots()[i].ready:
 				g.harvest(i)
 		_sell_all(g)
-		if g.get_cash() >= 150.0:
+		if g.get_cash() >= 230.0:
 			break
 		_tick_to(g, 20.0)
 	check(g.get_cash() >= 150.0, "economy: saved up for venue")
@@ -259,7 +251,7 @@ func _run() -> void:
 		g.harvest(0)
 	g.restore(snap)
 	check(absf(g.get_cash() - snap_cash) < 0.001, "serialize/restore: cash restored")
-	check(g.get_plots().size() == 6 and g.get_plots()[0].crop == (snap_plots[0].crop if not snap_plots[0].ready else snap_plots[0].crop), "serialize/restore: plots restored")
+	check(g.get_plots().size() == 6 and str(g.get_plots()[0].crop) == str(snap_plots[0].crop), "serialize/restore: plots restored")
 
 	s.save_data(g.serialize())
 	var g2 := _new_sim()
@@ -271,7 +263,17 @@ func _run() -> void:
 	var plot_hits := Counter.new()
 	g.cash_changed.connect(func(_v): cash_hits.n += 1)
 	g.plot_changed.connect(func(_i, _st): plot_hits.n += 1)
-	g.plant(4, "chilli_raw")
+	var planted_sig := false
+	for _sig_try in 240:
+		for i in 6:
+			var stp: Dictionary = g.get_plots()[i]
+			if not stp.locked and stp.crop == "":
+				if g.plant(i, "chilli_raw"):
+					planted_sig = true
+				break
+		if planted_sig:
+			break
+		g.tick(2.0)
 	g.sell_stock("chilli_raw", 1) if int(g.get_stock().get("chilli_raw", 0)) > 0 else g.tick(0.1)
 	check(cash_hits.n > 0 and plot_hits.n > 0, "signals: cash_changed + plot_changed fired")
 
