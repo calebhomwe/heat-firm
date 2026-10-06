@@ -39,7 +39,11 @@ jobs:
       - name: Import project
         run: godot --headless --path "$PROJECT_DIR" --import
 
+      # shell: bash makes GitHub run these with `-eo pipefail`, so Godot's own
+      # exit code (quit(1) from the test scripts, a missing script, a failed
+      # scene load) fails the step instead of being masked by `| tee`.
       - name: Sim test gates
+        shell: bash
         run: |
           for t in tests/run_tests.gd tests/test_sim_fixes.gd; do
             godot --headless --path "$PROJECT_DIR" --script "res://$t" 2>&1 | tee "$RUNNER_TEMP/t.log"
@@ -47,6 +51,7 @@ jobs:
           done
 
       - name: Boot main scene (fail on script/parse errors)
+        shell: bash
         run: |
           godot --headless --path "$PROJECT_DIR" --quit-after 300 2>&1 | tee "$RUNNER_TEMP/run.log"
           if grep -E "SCRIPT ERROR|Parse Error|Compile Error" "$RUNNER_TEMP/run.log"; then exit 1; fi
