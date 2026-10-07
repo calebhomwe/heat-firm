@@ -89,5 +89,11 @@ jobs:
       group: pages
       cancel-in-progress: false
     steps:
+      # Creates the Pages site (Source = GitHub Actions) if it does not exist
+      # yet, so the first deploy on main does not 404 in deploy-pages before
+      # Pages has been enabled in Settings. No-op once the site exists.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - id: deployment
         uses: actions/deploy-pages@v4
