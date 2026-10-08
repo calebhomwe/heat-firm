@@ -1,0 +1,99 @@
+name: godot-web
+
+# Imports godot/ headless, runs both sim test gates, boots the main scene,
+# exports a thread-less Web build (uploaded as an Actions artifact) and, on
+# pushes to main in the public repo, deploys it to GitHub Pages.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.7"
+  PROJECT_DIR: "godot"
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Godot ${{ env.GODOT_VERSION }} + export templates
+        run: |
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          curl -fsSL -o "$RUNNER_TEMP/godot.zip" "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          sudo ln -sf "$RUNNER_TEMP/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          curl -fsSL -o "$RUNNER_TEMP/tpl.tpz" "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          unzip -q "$RUNNER_TEMP/tpl.tpz" -d "$RUNNER_TEMP/tpl"
+          mkdir -p ~/.local/share/godot/export_templates
+          mv "$RUNNER_TEMP/tpl/templates" ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          godot --version
+
+      - name: Import project
+        run: godot --headless --path "$PROJECT_DIR" --import
+
+      # shell: bash makes GitHub run these with `-eo pipefail`, so Godot's own
+      # exit code (quit(1) from the test scripts, a missing script, a failed
+      # scene load) fails the step instead of being masked by `| tee`.
+      - name: Sim test gates
+        shell: bash
+        run: |
+          for t in tests/run_tests.gd tests/test_sim_fixes.gd; do
+            godot --headless --path "$PROJECT_DIR" --script "res://$t" 2>&1 | tee "$RUNNER_TEMP/t.log"
+            if grep -E "SCRIPT ERROR|Parse Error|^FAIL" "$RUNNER_TEMP/t.log"; then exit 1; fi
+          done
+
+      - name: Boot main scene (fail on script/parse errors)
+        shell: bash
+        run: |
+          godot --headless --path "$PROJECT_DIR" --quit-after 300 2>&1 | tee "$RUNNER_TEMP/run.log"
+          if grep -E "SCRIPT ERROR|Parse Error|Compile Error" "$RUNNER_TEMP/run.log"; then exit 1; fi
+
+      - name: Export Web (thread-less)
+        run: |
+          mkdir -p "$RUNNER_TEMP/web"
+          godot --headless --path "$PROJECT_DIR" --export-release Web "$RUNNER_TEMP/web/index.html"
+          test -s "$RUNNER_TEMP/web/index.pck"
+          test -s "$RUNNER_TEMP/web/index.wasm"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: heat-firm-web
+          path: ${{ runner.temp }}/web
+          if-no-files-found: error
+
+      - name: Upload Pages artifact
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.private }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/web
+
+  deploy:
+    needs: web
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      # Creates the Pages site (Source = GitHub Actions) if it does not exist
+      # yet, so the first deploy on main does not 404 in deploy-pages before
+      # Pages has been enabled in Settings. No-op once the site exists.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - id: deployment
+        uses: actions/deploy-pages@v4

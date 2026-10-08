@@ -11,3 +11,5 @@
 
 # Godot
 .godot/
+# default export_path in godot/export_presets.cfg (CI/README export to a temp dir)
+godot/build/
